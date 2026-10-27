@@ -37,4 +37,4 @@ You can view or download the code from the github repo itself to verify this.
 ![Preview](preview.png)
 
 ## App Link
-[github_traffic.html](https://github.com/joyrider3774/github-traffic-stats/github-traffic-stats.html)
+[github_traffic.html](https://joyrider3774.github.io/github-traffic-stats/github-traffic-stats.html)
