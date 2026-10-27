@@ -18,11 +18,17 @@ Just provide a github token and it will fetch all your own created repo's (forks
 
 All tables can be sorted by clicking a column header, and the sidebar can be filtered to quickly find a repo.
 
+## Period and grouping filters
+The charts can show the last 7 days, 14 days, 30 days, 90 days, 12 months or all stored history, grouped per day, week (starting on Monday) or month. Below each chart the views and clones total for the selected period is shown.
+When a period other than 14 days is selected, the repository table gets extra views and clones columns for that period, so you can sort your repos on e.g. the last 90 days.
+When grouping per week or month, the unique visitors line is the sum of the daily unique visitors, as GitHub doesn't provide unique visitors per week or month.
+The filters are remembered in the browser.
+
 ## Difference tracking
 When refreshed the app shows little red or green difference information compared to the previous refresh, for totals, per-repo numbers and referrers. Referrers that weren't there on the previous refresh are marked as "new".
 
 ## History beyond 14 days
-GitHub only keeps traffic data for the last 14 days. Every refresh stores the daily views and clones in the browser, so the "All stored history" chart keeps growing over time as long as you refresh at least once every 14 days.
+GitHub only keeps traffic data for the last 14 days. Every refresh stores the daily views and clones in the browser, so the longer periods (30 days, 90 days, 12 months and all history) fill up over time as long as you refresh at least once every 14 days. If the stored history doesn't cover the whole selected period yet, a note below the chart shows how far back it goes.
 Use "Export history" to save this data to a json file as a backup and "Import" to merge it back in, for example in another browser or on another PC.
 Referrers and popular content are only available as the current 14 day top 10 per repo, so those are not kept as history.
 

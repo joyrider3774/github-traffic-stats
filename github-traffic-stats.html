@@ -46,6 +46,8 @@ td.clip{max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowra
 .muted{color:var(--muted)}
 .seg button{padding:4px 9px;font-size:12px}
 .seg button.on{background:var(--accent-soft);color:var(--accent);border-color:var(--accent)}
+.controls{display:flex;gap:12px;flex-wrap:wrap;font-weight:400}
+.period-note{margin:8px 0 0;font-size:12px}
 a{color:var(--accent);text-decoration:none}
 .link{cursor:pointer;color:var(--accent)}
 .empty{padding:40px;text-align:center;color:var(--muted)}
@@ -72,7 +74,9 @@ a{color:var(--accent);text-decoration:none}
   <main id="main"></main>
 </div>
 <script>
-const LS = {token:'ghTraffic.token', data:'ghTraffic.data', prev:'ghTraffic.prev', hist:'ghTraffic.history', forks:'ghTraffic.forks'};
+const LS = {token:'ghTraffic.token', data:'ghTraffic.data', prev:'ghTraffic.prev', hist:'ghTraffic.history', forks:'ghTraffic.forks', period:'ghTraffic.period', group:'ghTraffic.group'};
+const PERIODS = {'7':'7 days', '14':'14 days', '30':'30 days', '90':'90 days', '365':'12 months', 'all':'All history'};
+const GROUPS = {day:'Day', week:'Week', month:'Month'};
 const ls = {
   get(k, d){ try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch(e){ return d; } },
   set(k, v){ try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch(e){ console.warn(e); return false; } }
@@ -84,7 +88,10 @@ let data = ls.get(LS.data, null);
 let prev = ls.get(LS.prev, null);
 let hist = ls.get(LS.hist, {});
 let selected = null;   // null = overview
-let range = '14';      // '14' or 'all'
+let period = ls.get(LS.period, '14');   // key of PERIODS
+let group = ls.get(LS.group, 'day');     // key of GROUPS
+if (!PERIODS[period]) period = '14';
+if (!GROUPS[group]) group = 'day';
 let charts = [], pending = [];
 const sortState = {};
 
@@ -220,29 +227,57 @@ function dateRange(a, b){
   while (d <= e){ out.push(d.toISOString().slice(0,10)); d.setUTCDate(d.getUTCDate() + 1); }
   return out;
 }
+// daily data for one repo: stored history plus the latest fetch
+function dailyMaps(full){
+  const h = hist[full] || {v:{}, c:{}};
+  const v = {...h.v}, c = {...h.c};
+  const r = data.repos.find(x => x.full === full);
+  if (r){
+    r.viewsDaily.forEach(x => v[x.date] = [x.count, x.uniques]);
+    r.clonesDaily.forEach(x => c[x.date] = [x.count, x.uniques]);
+  }
+  return {v, c};
+}
+function periodBounds(){
+  const end = data.fetchedAt.slice(0,10);
+  if (period === 'all'){
+    let min = end;
+    for (const h of Object.values(hist)) for (const k of ['v', 'c']) for (const d in h[k]) if (d < min) min = d;
+    for (const r of data.repos) for (const x of [...r.viewsDaily, ...r.clonesDaily]) if (x.date < min) min = x.date;
+    return [min, end];
+  }
+  const s = new Date(end + 'T00:00:00Z');
+  s.setUTCDate(s.getUTCDate() - (+period - 1));
+  return [s.toISOString().slice(0,10), end];
+}
+function bucket(d){
+  if (group === 'month') return d.slice(0,7);
+  if (group === 'week'){   // weeks start on Monday
+    const x = new Date(d + 'T00:00:00Z');
+    x.setUTCDate(x.getUTCDate() - (x.getUTCDay() + 6) % 7);
+    return x.toISOString().slice(0,10);
+  }
+  return d;
+}
 function series(fulls){
-  const v = {}, u = {}, c = {};
-  const add = (o, k, n) => o[k] = (o[k] || 0) + n;
-  if (range === '14'){
-    for (const r of data.repos) if (fulls.includes(r.full)){
-      r.viewsDaily.forEach(x => { add(v, x.date, x.count); add(u, x.date, x.uniques); });
-      r.clonesDaily.forEach(x => add(c, x.date, x.count));
+  const [start, end] = periodBounds();
+  const keys = [...new Set(dateRange(start, end).map(bucket))];
+  const idx = Object.fromEntries(keys.map((k, i) => [k, i]));
+  const V = keys.map(() => 0), U = keys.map(() => 0), C = keys.map(() => 0);
+  let first = null;
+  for (const f of fulls){
+    const {v, c} = dailyMaps(f);
+    for (const [d, [n, u]] of Object.entries(v)) if (d >= start && d <= end){
+      const i = idx[bucket(d)]; V[i] += n; U[i] += u; if (!first || d < first) first = d;
     }
-  } else {
-    for (const f of fulls){
-      const h = hist[f]; if (!h) continue;
-      for (const [d, [cn, un]] of Object.entries(h.v)){ add(v, d, cn); add(u, d, un); }
-      for (const [d, [cn]] of Object.entries(h.c)) add(c, d, cn);
+    for (const [d, [n]] of Object.entries(c)) if (d >= start && d <= end){
+      C[idx[bucket(d)]] += n; if (!first || d < first) first = d;
     }
   }
-  const ds = [...Object.keys(v), ...Object.keys(c)].sort();
-  let end = range === '14' ? data.fetchedAt.slice(0,10) : ds[ds.length - 1];
-  let start = ds[0];
-  if (range === '14' && !start){ const s = new Date(data.fetchedAt); s.setUTCDate(s.getUTCDate() - 13); start = s.toISOString().slice(0,10); }
-  if (!start) return {labels:[], views:[], uniques:[], clones:[]};
-  if (end < ds[ds.length - 1]) end = ds[ds.length - 1];
-  const labels = dateRange(start, end);
-  return {labels, views:labels.map(d => v[d] || 0), uniques:labels.map(d => u[d] || 0), clones:labels.map(d => c[d] || 0)};
+  const short = period !== 'all' && period !== '365';
+  const label = k => group === 'month' ? k : (group === 'week' ? 'wk ' : '') + (short ? k.slice(5) : k);
+  return {labels: keys.map(label), views:V, uniques:U, clones:C, start, end, first,
+    total: {views: V.reduce((a, b) => a + b, 0), clones: C.reduce((a, b) => a + b, 0)}};
 }
 
 /* ---------- rendering helpers ---------- */
@@ -257,7 +292,20 @@ const card = (label, val, old, hp) =>
   `<div class="card"><div class="label">${label}</div><div class="value">${fmt(val)}${diff(val, old, hp)}</div></div>`;
 const repoLink = (full, name) => `<span class="link" data-repo="${esc(full)}">${esc(name)}</span>`;
 const pathLink = p => `<a href="https://github.com${esc(p)}" target="_blank" rel="noopener">${esc(p)}</a>`;
-const rangeToggle = () => `<span class="seg"><button data-range="14" class="${range === '14' ? 'on' : ''}">14 days</button> <button data-range="all" class="${range === 'all' ? 'on' : ''}">All stored history</button></span>`;
+const chartControls = () => `<span class="controls">
+  <span class="seg">${Object.entries(PERIODS).map(([k, l]) => `<button data-period="${k}" class="${period === k ? 'on' : ''}">${l}</button>`).join(' ')}</span>
+  <span class="seg">${Object.entries(GROUPS).map(([k, l]) => `<button data-group="${k}" class="${group === k ? 'on' : ''}">${l}</button>`).join(' ')}</span>
+</span>`;
+function periodNote(s){
+  let t = `${s.start} to ${s.end}: ${fmt(s.total.views)} views, ${fmt(s.total.clones)} clones.`;
+  if (!s.first) t += ' No traffic stored for this period.';
+  else if (period !== 'all' && s.first > s.start) t += ` Stored history only goes back to ${s.first}; refresh regularly to build it up.`;
+  return `<p class="muted period-note">${esc(t)}</p>`;
+}
+function chartPanel(title, id, fulls){
+  const s = series(fulls);
+  return `<div class="panel"><h2>${title} ${chartControls()}</h2>${chartBox(id, s)}${periodNote(s)}</div>`;
+}
 
 function table(id, cols, rows, defSort){
   const st = sortState[id] || (sortState[id] = {...defSort});
@@ -282,9 +330,9 @@ function drawCharts(){
     const el = $(id); if (!el) continue;
     charts.push(new Chart(el, {
       type: 'line',
-      data: {labels: s.labels.map(d => range === '14' ? d.slice(5) : d), datasets: [
+      data: {labels: s.labels, datasets: [
         {label:'Views', data:s.views, borderColor:'#2f6fde', backgroundColor:'rgba(47,111,222,.15)', fill:true, tension:.25, pointRadius:2},
-        {label:'Unique visitors', data:s.uniques, borderColor:'#1a9a6c', tension:.25, pointRadius:2},
+        {label: group === 'day' ? 'Unique visitors' : 'Unique visitors (sum of daily)', data:s.uniques, borderColor:'#1a9a6c', tension:.25, pointRadius:2},
         {label:'Clones', data:s.clones, borderColor:'#d08a1e', borderDash:[4,3], tension:.25, pointRadius:2}]},
       options: {maintainAspectRatio:false, interaction:{mode:'index', intersect:false},
         plugins:{legend:{labels:{color:muted}}},
@@ -309,7 +357,15 @@ function overviewView(){
   const R = data.repos, t = totals(R), hp = !!prev, p = prev?.totals || {};
   const refs = aggRefs(R);
   const paths = R.flatMap(r => r.paths.map(x => ({...x, repo:r.name, full:r.full})));
-  const rows = R.map(r => ({...r, topRef: r.referrers.slice().sort((a, b) => b.count - a.count)[0]?.referrer || ''}));
+  const showPeriod = period !== '14';
+  const rows = R.map(r => {
+    const row = {...r, topRef: r.referrers.slice().sort((a, b) => b.count - a.count)[0]?.referrer || ''};
+    if (showPeriod){ const t = series([r.full]).total; row.pViews = t.views; row.pClones = t.clones; }
+    return row;
+  });
+  const periodCols = showPeriod ? [
+    {key:'pViews', label:`Views (${PERIODS[period]})`, num:true, render:r => fmt(r.pViews)},
+    {key:'pClones', label:`Clones (${PERIODS[period]})`, num:true, render:r => fmt(r.pClones)}] : [];
   const errs = R.filter(r => r.error).length;
   return `
   <div class="cards">
@@ -321,7 +377,7 @@ function overviewView(){
     ${card('Repos with views', t.active, p.active, hp)}
     ${card('Stars', t.stars, p.stars, hp)}
   </div>
-  <div class="panel"><h2>Traffic across all repositories ${rangeToggle()}</h2>${chartBox('chAll', series(R.map(r => r.full)))}</div>
+  ${chartPanel('Traffic across all repositories', 'chAll', R.map(r => r.full))}
   <div class="grid2">
     <div class="panel"><h2>Top referrers, all repos</h2>${table('ovRefs', [
       {key:'referrer', label:'Referrer', clip:true},
@@ -338,10 +394,11 @@ function overviewView(){
   </div>
   <div class="panel"><h2>Repositories</h2>${table('ovRepos', [
     {key:'name', label:'Repository', render:r => repoLink(r.full, r.name) + (r.error ? ` <span class="muted">(${esc(r.error)})</span>` : '')},
-    {key:'views', label:'Views', num:true, render:r => fmt(r.views) + diff(r.views, prev?.repos?.[r.full]?.views, hp)},
+    {key:'views', label:'Views (14d)', num:true, render:r => fmt(r.views) + diff(r.views, prev?.repos?.[r.full]?.views, hp)},
     {key:'uniques', label:'Uniques', num:true, render:r => fmt(r.uniques) + diff(r.uniques, prev?.repos?.[r.full]?.uniques, hp)},
-    {key:'clones', label:'Clones', num:true, render:r => fmt(r.clones) + diff(r.clones, prev?.repos?.[r.full]?.clones, hp)},
+    {key:'clones', label:'Clones (14d)', num:true, render:r => fmt(r.clones) + diff(r.clones, prev?.repos?.[r.full]?.clones, hp)},
     {key:'cloneUniques', label:'Cloners', num:true, render:r => fmt(r.cloneUniques)},
+    ...periodCols,
     {key:'stars', label:'Stars', num:true, render:r => fmt(r.stars) + diff(r.stars, prev?.repos?.[r.full]?.stars, hp)},
     {key:'topRef', label:'Top referrer', clip:true}
   ], rows, {key:'views', dir:-1})}</div>
@@ -365,7 +422,7 @@ function repoView(r){
     ${card('Stars', r.stars, p.stars, hp)}
     ${card('Forks', r.forks)}
   </div>
-  <div class="panel"><h2>Traffic ${rangeToggle()}</h2>${chartBox('chRepo', series([r.full]))}</div>
+  ${chartPanel('Traffic', 'chRepo', [r.full])}
   <div class="grid2">
     <div class="panel"><h2>Referring sites</h2>${table('rRefs', [
       {key:'referrer', label:'Referrer', clip:true},
@@ -404,8 +461,10 @@ $('main').addEventListener('click', e => {
     if (st.key === k) st.dir *= -1; else { st.key = k; st.dir = th.classList.contains('num') ? -1 : 1; }
     render(); return;
   }
-  const rb = e.target.closest('[data-range]');
-  if (rb){ range = rb.dataset.range; render(); return; }
+  const pb = e.target.closest('[data-period]');
+  if (pb){ period = pb.dataset.period; ls.set(LS.period, period); render(); return; }
+  const gb = e.target.closest('[data-group]');
+  if (gb){ group = gb.dataset.group; ls.set(LS.group, group); render(); return; }
   const rl = e.target.closest('[data-repo]');
   if (rl){ selected = rl.dataset.repo || null; render(); window.scrollTo(0, 0); }
 });
